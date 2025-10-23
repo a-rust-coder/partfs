@@ -14,6 +14,7 @@ pub struct RawMbr {
     signature: u16,
 }
 
+/// This struct is identity mapped to an MBR partition entry.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MbrEntry {
@@ -28,7 +29,10 @@ pub struct MbrEntry {
 impl RawMbr {
     /// # Errors
     ///
-    /// TODO:
+    /// `UnsupportedDiskSectorSize` if `disk` doesn't support any sector size greater than or equal
+    /// to 512B (minimal requirement for MBR).
+    ///
+    /// Will return any error that `disk.disk_infos()` may produce.
     pub fn write_to_disk(&self, disk: &dyn Disk) -> Result<(), DiskErr> {
         disk.disk_infos()?.sector_size.minimal_ge(512).map_or(
             Err(DiskErr::UnsupportedDiskSectorSize),
@@ -42,7 +46,10 @@ impl RawMbr {
 
     /// # Errors
     ///
-    /// TODO:
+    /// `UnsupportedDiskSectorSize` if `disk` doesn't support any sector size greater than or equal
+    /// to 512B (minimal requirement for MBR).
+    ///
+    /// Will return any error that `disk.disk_infos()` may produce.
     #[allow(clippy::missing_panics_doc)]
     pub fn read_from_disk(disk: &dyn Disk) -> Result<Self, DiskErr> {
         if let Some(sector_size) = disk.disk_infos()?.sector_size.minimal_ge(512) {
@@ -55,6 +62,7 @@ impl RawMbr {
         }
     }
 
+    /// Provides the bytes representation of itself, directly writable to the disk.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; 512] {
         let mut buf = [0u8; 512];
@@ -72,6 +80,8 @@ impl RawMbr {
         buf
     }
 
+    /// Try to read a MBR partition table from a raw sector/part of a sector. Do NOT guarantee the
+    /// resulting structure is valid, `None` is returned only if the buffer size is less than 512.
     #[must_use]
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < 512 {
@@ -100,6 +110,7 @@ impl RawMbr {
 }
 
 impl MbrEntry {
+    /// Produces an empty entry (filled with 0).
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -112,6 +123,7 @@ impl MbrEntry {
         }
     }
 
+    /// Writes the entry to a buffer. May panic if the buffer is too small.
     pub fn write_to(&self, buf: &mut [u8]) {
         buf[0] = self.status;
         buf[1..4].copy_from_slice(&self.chs_first);
@@ -121,6 +133,7 @@ impl MbrEntry {
         buf[12..16].copy_from_slice(&self.sectors.to_le_bytes());
     }
 
+    /// Reads an entry from a buffer. May panic if the buffer is too small.
     #[must_use]
     pub fn read_from(buf: &[u8]) -> Self {
         Self {

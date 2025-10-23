@@ -2,6 +2,7 @@ use crate::{Disk, DiskErr, DiskInfos, Permissions, SectorSize};
 use alloc::vec::Vec;
 use mutex::Mutex;
 
+/// An in-memory instance of a `Disk`.
 pub struct MemDisk {
     sector_size: SectorSize,
     permissions: Permissions,

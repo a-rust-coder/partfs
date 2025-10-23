@@ -94,7 +94,12 @@ impl Disk for DiskFile {
 
         // ### PERFORMS THE WRITE OPERATION ON THE FILE ###
 
-        if self.file.lock().seek(SeekFrom::Start(offset as u64)).is_err() {
+        if self
+            .file
+            .lock()
+            .seek(SeekFrom::Start(offset as u64))
+            .is_err()
+        {
             return Err(DiskErr::IOErr);
         }
 
@@ -120,7 +125,8 @@ impl DiskFile {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// Returns the errors produced when creating a file, opening a file, or trying to get its
+    /// metadata.
     pub fn new(
         path: PathBuf,
         size: usize,
@@ -138,7 +144,7 @@ impl DiskFile {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// Returns the errors produced when opening a file or trying to get its metadata.
     pub fn from_file(
         file: PathBuf,
         sector_conf: SectorSize,

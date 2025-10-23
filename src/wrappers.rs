@@ -6,7 +6,8 @@ use alloc::{
 };
 use mutex::Mutex;
 
-/// A global wrapper that can be created from any `Disk`. Is used only for creating `SubDisk`s
+/// A global wrapper that can be created from any `Disk`. Is used only for creating `SubDisk`s or
+/// `FragmentedSubDisk`s.
 pub struct DiskWrapper {
     /// The disk from where it has been created
     disk: Mutex<Box<dyn Disk>>,
@@ -68,7 +69,11 @@ impl DiskWrapper {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// `Busy` if the space is already borrowed.
+    ///
+    /// `InvalidDiskSize` if `end` is after the end of `self`.
+    ///
+    /// Any error that `self.disk.disk_infos()` may return.
     pub fn subdisk(
         &self,
         start: usize,
@@ -349,6 +354,7 @@ impl Drop for SubDisk {
     }
 }
 
+/// Acts like a `SubDisk` but can handle non-continuous space.
 #[derive(Debug)]
 pub struct FragmentedSubDisk {
     parent: Weak<DiskWrapper>,

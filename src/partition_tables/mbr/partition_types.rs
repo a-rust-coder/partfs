@@ -13,4 +13,5 @@ pub const HPFS: u8 = 0x07;
 /// HPFS/NTFS/exFAT
 pub const NTFS: u8 = 0x07;
 
+/// Used for FAT32 partitions with LBA system.
 pub const FAT32_LBA: u8 = 0x0C;

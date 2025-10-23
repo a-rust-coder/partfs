@@ -5,17 +5,22 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// Procides an implementation of the `Disk` trait for `std::fs`
+/// Provides an implementation of the `Disk` trait for `std::fs`
 #[cfg(feature = "std")]
 pub mod std_helpers;
 
 #[cfg(feature = "std")]
 pub use std_helpers::*;
 
+/// Provides support for the following filesystems:
+///  - FAT12
 pub mod filesystems;
+/// An in-memory instance of `Disk`
 pub mod memdisk;
+/// Provides support for the following partition tables:
+///  - MBR
 pub mod partition_tables;
-/// Procides disk wrappers to allow subdisk creation. `SubDisk`s are useful when working with
+/// Provides disk wrappers to allow subdisk creation. `SubDisk`s are useful when working with
 /// partitions or filesystems for example.
 pub mod wrappers;
 
@@ -33,7 +38,8 @@ pub trait Disk {
     /// # Errors
     ///
     /// The possibility to return an error is at the discretion of the implementation. Usually, it
-    /// can be a permission error, an invalid buffer size, or an invalid sector index.
+    /// can be a permission error, an invalid buffer size, an invalid sector index, or an
+    /// unavailable disk.
     fn read_sector(&self, sector: usize, buf: &mut [u8]) -> Result<(), DiskErr>;
 
     /// The size of the buffer is implicitly the sector size (in bytes). `sector` is the LBA of the
@@ -43,7 +49,8 @@ pub trait Disk {
     /// # Errors
     ///
     /// The possibility to return an error is at the discretion of the implementation. Usually, it
-    /// can be a permission error, an invalid buffer size, or an invalid sector index.
+    /// can be a permission error, an invalid buffer size, an invalid sector index, or an
+    /// unavailable disk.
     fn write_sector(&self, sector: usize, buf: &[u8]) -> Result<(), DiskErr>;
 
     /// # Errors
@@ -61,7 +68,10 @@ pub enum DiskErr {
     ///
     /// `supported` is the supported sector size(s)
     ///
-    /// `start % sector_size` should be zero (used with subdisks)
+    /// `start % sector_size` should be zero (used with subdisks).
+    /// Note that `start` is not guaranteed to be relative to the root disk, meaning it's only
+    /// relative to the direct parent disk. It can explain why an error triggers even if the sector
+    /// size os supported.
     InvalidSectorSize {
         found: usize,
         supported: SectorSize,
@@ -72,46 +82,57 @@ pub enum DiskErr {
     ///
     /// `found` is the provided sector index (lba)
     ///
-    /// `max` is the last existing sector index **with the size of the given buffer**
-    InvalidSectorIndex {
-        found: usize,
-        max: usize,
-    },
+    /// `max` is the last existing sector index **with the size of the given buffer**.
+    InvalidSectorIndex { found: usize, max: usize },
 
     /// Will trigger if a write is performed on a read-only disk or if the program tries to read a
-    /// write-only disk
-    InvalidPermission {
-        disk_permissions: Permissions,
-    },
+    /// write-only disk.
+    InvalidPermission { disk_permissions: Permissions },
 
-    /// Will trigger if, for any reason, the disk is not found anymore.
+    /// Will trigger if, for any reason, the disk can not be found.
     UnreachableDisk,
 
     /// Will trigger when attempting to create a subdisk out of the range of the original disk
-    /// size
+    /// size.
     InvalidDiskSize,
 
     /// Will trigger if a read/write/subdisk creation is requested when the disk is already in
     /// use/on a space already borrowed
     Busy,
 
-    /// Will trigger for all the errors coming from IO processes
+    /// Will trigger for all the unknown errors coming from IO processes (for example with `std`).
     IOErr,
 
+    /// The disk doesn't support the sector size requested by the partition table or the
+    /// filesystem.
     UnsupportedDiskSectorSize,
+
+    /// The partition index is out of the range of the existing partitions on the disk.
     InvalidPartitionIndex,
+
+    /// The requested space is already used by an other process or already borrowed by an other
+    /// subdisk. The borrowing rules for subdisks follow the Rust rules: exactly one read/write or
+    /// write-only borrow or any number of read-only borrows.
     SpaceAlreadyInUse,
+
+    /// The requested index is out of the maximum range.
     IndexOutOfRange,
-    InvalidPathFormat,
+
+    /// The value is out of the range of the value type internally used (e.g., 0x10000 is requested
+    /// while the number is stored on 16 bits).
     OutOfRangeValue,
 }
 
+/// Represents the informations provided by a `Disk` instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskInfos {
+    /// The supported sector size(s).
     pub sector_size: SectorSize,
-    /// The disk size in bytes
+
+    /// The disk size in bytes.
     pub disk_size: usize,
-    /// Specially useful when working with disk images, or without `sudo` privileges
+
+    /// Specially useful when working with disk images, or without `sudo` privileges.
     pub permissions: Permissions,
 }
 
@@ -146,6 +167,7 @@ pub struct Permissions {
 }
 
 impl Permissions {
+    /// Only allows to read the disk.
     #[must_use]
     pub const fn read_only() -> Self {
         Self {
@@ -154,6 +176,7 @@ impl Permissions {
         }
     }
 
+    /// Only allows to write the disk.
     #[must_use]
     pub const fn write_only() -> Self {
         Self {
@@ -162,6 +185,7 @@ impl Permissions {
         }
     }
 
+    /// Allows both to read and write the disk.
     #[must_use]
     pub const fn read_write() -> Self {
         Self {

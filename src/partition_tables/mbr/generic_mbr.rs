@@ -23,14 +23,24 @@ impl GenericMbr {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// `UnsupportedDiskSectorSize` if the disk doesn't support a sector size greater than or equal
+    /// to 512 (minimal MBR requirement).
+    ///
+    /// Will return any error that `disk.disk_infos()` may produce.
     pub fn new<T: Disk + 'static>(disk: T, sector_size: Option<usize>) -> Result<Self, DiskErr> {
+        let disk_infos = disk.disk_infos()?;
         let sector_size = match sector_size {
-            None => match disk.disk_infos()?.sector_size.minimal_ge(512) {
+            None => match disk_infos.sector_size.minimal_ge(512) {
                 None => return Err(DiskErr::UnsupportedDiskSectorSize),
                 Some(v) => v,
             },
-            Some(v) => v,
+            Some(v) => {
+                if v < 512 || !disk_infos.sector_size.is_supported(v, disk_infos.disk_size) {
+                    return Err(DiskErr::UnsupportedDiskSectorSize);
+                } else {
+                    v
+                }
+            }
         };
 
         Ok(Self {
@@ -48,7 +58,12 @@ impl GenericMbr {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// `UnsupportedDiskSectorSize` if the disk doesn't support a sector size greater than or equal
+    /// to 512 (minimal MBR requirement).
+    ///
+    /// Will return any error that `disk.disk_infos()` may produce.
+    ///
+    /// Will return any error that `RawMbr::read_from_disk(&disk)` may produce.
     pub fn read_from_disk<T: Disk + 'static>(
         disk: T,
         sector_size: Option<usize>,
@@ -77,7 +92,7 @@ impl GenericMbr {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// Will return any error that `RawMbr::write_to_disk(...)` may produce.
     pub fn write(&self) -> Result<(), DiskErr> {
         self.raw.write_to_disk(&*self.disk)
     }
@@ -130,7 +145,7 @@ impl GenericMbr {
     ///
     /// # Errors
     ///
-    /// TODO:
+    /// Many possible errors... TODO: documentation
     pub fn create_partition(
         &mut self,
         partition_index: usize,
