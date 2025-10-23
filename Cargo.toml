@@ -1,0 +1,11 @@
+[package]
+name = "partfs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mutex = { git = "https://github.com/a-rust-coder/mutex.git" }
+time-units = { path = "../os/libs/time-units/" }
+
+[features]
+std = []
