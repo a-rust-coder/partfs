@@ -3,7 +3,7 @@ use crate::{
     filesystems::fat::{FatEntry, FatError, FatFS, fat12::bpb::BiosParameterBlock},
     wrappers::{DiskWrapper, FragmentedSubDisk, SubDisk},
 };
-use alloc::{sync::Arc, vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 
 pub mod bpb;
 
