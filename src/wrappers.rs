@@ -133,22 +133,20 @@ impl DiskWrapper {
                 return Err(DiskErr::InvalidDiskSize);
             }
 
-            if permissions.read
-                && (|| {
-                    for i in r_borrows.clone() {
-                        if (i.0 <= start && start < i.1) || (i.0 < end && end <= i.1) {
-                            return true;
-                        }
+            if (|| {
+                for i in w_borrows.clone() {
+                    if (i.0 <= start && start < i.1) || (i.0 < end && end <= i.1) {
+                        return true;
                     }
-                    false
-                })()
-            {
+                }
+                false
+            })() {
                 return Err(DiskErr::SpaceAlreadyInUse);
             }
 
             if permissions.write
                 && (|| {
-                    for i in w_borrows.clone() {
+                    for i in r_borrows.clone() {
                         if (i.0 <= start && start < i.1) || (i.0 < end && end <= i.1) {
                             return true;
                         }

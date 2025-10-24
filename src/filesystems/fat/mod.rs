@@ -1,6 +1,6 @@
 use crate::{
     Disk, DiskErr, Permissions,
-    filesystems::fat::dir::{DirEntryRaw, Directory},
+    filesystems::fat::dir::{DirEntry, DirEntryRaw, Directory},
     wrappers::{DiskWrapper, FragmentedSubDisk, SubDisk},
 };
 use alloc::{sync::Arc, vec, vec::Vec};
@@ -8,19 +8,18 @@ use alloc::{sync::Arc, vec, vec::Vec};
 pub mod dir;
 pub mod fat12;
 
+/// A generic trait to avoid code duplication.
+///
+/// Should be implemented for FAT12, FAT16 and FAT32
 pub trait FatFS {
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     fn get_fat_entry(
         &self,
         index: usize,
         fat_index: usize,
     ) -> Result<Result<FatEntry, FatError>, DiskErr>;
 
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     fn set_fat_entry(
         &self,
         index: usize,
@@ -28,9 +27,7 @@ pub trait FatFS {
         value: FatEntry,
     ) -> Result<Result<(), FatError>, DiskErr>;
 
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     fn get_cluster(
         &self,
         index: usize,
@@ -39,24 +36,18 @@ pub trait FatFS {
 
     fn sector_size(&self) -> usize;
 
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     fn get_root_dir(&self, permissions: Permissions) -> Result<SubDisk, DiskErr>;
 
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     fn create_frangemented_subdisk(
         &self,
         clusters: Vec<usize>,
         permissions: Permissions,
     ) -> Result<Result<FragmentedSubDisk, FatError>, DiskErr>;
 
-    /// # Errors
-    ///
-    /// TODO:
-    fn get_file(
+    #[allow(clippy::missing_errors_doc)]
+    fn get_cluster_chain(
         &self,
         first_cluster: usize,
         permissions: Permissions,
@@ -80,81 +71,61 @@ pub trait FatFS {
         self.create_frangemented_subdisk(clusters, permissions)
     }
 
-    /// # Errors
-    ///
-    /// TODO:
-    fn get_dir(
-        &self,
-        directory: &Directory,
-        permissions: Permissions,
-    ) -> Result<Result<Arc<DiskWrapper>, FatError>, DiskErr> {
-        let root_dir = self.get_root_dir(Permissions::read_only())?;
-        let mut dir = DiskWrapper::new(root_dir);
-        let sector_size = self.sector_size();
-        let mut sector = vec![0; sector_size];
-        let mut entry = [0; 32];
-
-        for index in directory.rev_path().into_iter().rev() {
-            let offset = index * 32;
-            let sector_index = offset / sector_size;
-            let offset_in_sector = offset % sector_size;
-
-            dir.read_sector(sector_index, &mut sector)?;
-            entry.copy_from_slice(&sector[offset_in_sector..offset_in_sector + 32]);
-
-            let dir_entry_raw = DirEntryRaw::from(entry);
-
-            // TODO: check if this is a long file name entry
-
-            dir = DiskWrapper::new(
-                match self.get_file(dir_entry_raw.first_cluster(), permissions)? {
-                    Ok(v) => v,
-                    Err(e) => return Ok(Err(e)),
-                },
-            );
-        }
-
-        Ok(Ok(dir))
-    }
-
-    /// # Errors
-    ///
-    /// TODO:
-    fn ls_dir(&self, directory: Directory) -> Result<Result<Vec<Directory>, FatError>, DiskErr> {
-        let dir = match self.get_dir(&directory, Permissions::read_only())? {
-            Ok(v) => v,
-            Err(e) => return Ok(Err(e)),
-        };
-        let infos = dir.disk_infos()?;
-
-        // The following may be used to check if the sector size is valid:
-        //
-        // ```
-        // if !infos
-        //     .sector_size
-        //     .is_supported(self.sector_size(), infos.disk_size)
-        // {
-        //     return Err(DiskErr::UnsupportedDiskSectorSize);
-        // }
-        // ```
-        //
-        // But `self.disk_size` is supposed to be correct, so we'll simply try and return an error
-        // in case it doesn't work. We should also check if `sector_size % 32 == 0`, but again,
-        // it's assumed to be true.
+    #[allow(clippy::missing_errors_doc)]
+    fn ls_dir(&self, directory: Directory) -> Result<Result<Vec<DirEntry>, FatError>, DiskErr> {
+        let mut current_dir = DiskWrapper::new(self.get_root_dir(Permissions::read_only())?);
 
         let mut sector = vec![0; self.sector_size()];
         let mut entry = [0; 32];
+        let rev_path = directory.rev_path();
 
-        for i in 0..(infos.disk_size / self.sector_size() - 1) {
-            dir.read_sector(i, &mut sector)?;
+        for i in rev_path {
+            let sector_index = i / (self.sector_size() / 32);
+            let entry_index = i % (self.sector_size() / 32);
 
-            for i in 0..(self.sector_size() / 32 - 1) {
-                entry.copy_from_slice(&sector[i * 32..(i + 1) * 32]);
-                // TODO:
+            current_dir.read_sector(sector_index, &mut sector)?;
+            entry.copy_from_slice(&sector[entry_index * 32..entry_index * 32 + 32]);
+            let entry = DirEntryRaw::from(entry);
+
+            if entry.is_valid() && !entry.is_long_name() && entry.is_directory() {
+                current_dir = DiskWrapper::new(
+                    match self.get_cluster_chain(entry.first_cluster(), Permissions::read_only())? {
+                        Ok(v) => v,
+                        Err(e) => return Ok(Err(e)),
+                    },
+                );
+            } else {
+                return Ok(Err(FatError::InvalidDirEntry));
             }
         }
 
-        todo!()
+        let parent = Arc::new(directory);
+        let mut entries = Vec::new();
+
+        'find_entries: for s in 0..current_dir.disk_infos()?.disk_size / self.sector_size() {
+            current_dir.read_sector(s, &mut sector)?;
+            for e in 0..self.sector_size() / 32 {
+                entry.copy_from_slice(&sector[e * 32..e * 32 + 32]);
+                let entry = DirEntryRaw::from(entry);
+
+                if entry.is_valid() && !entry.is_long_name() {
+                    entries.push(DirEntry {
+                        raw: entry,
+                        parent: parent.clone(),
+                        parent_index: s * self.sector_size() / 32 + e,
+                        // This is safe to unwrap because the entry has been checked
+                        // (entry.is_valid)
+                        name: entry.short_name().unwrap(),
+                    });
+                }
+
+                if entry.are_all_following_free() {
+                    break 'find_entries;
+                }
+            }
+        }
+
+        Ok(Ok(entries))
     }
 }
 
@@ -167,9 +138,7 @@ pub enum FatEntry {
 }
 
 impl FatEntry {
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     pub const fn from_fat12(value: usize) -> Result<Self, FatError> {
         if value > 0xFFF {
             Err(FatError::InvalidValueForFATX)
@@ -184,9 +153,7 @@ impl FatEntry {
         }
     }
 
-    /// # Errors
-    ///
-    /// TODO:
+    #[allow(clippy::missing_errors_doc)]
     pub const fn to_fat12(&self) -> Result<usize, FatError> {
         match self {
             Self::Free => Ok(0),
@@ -215,4 +182,5 @@ pub enum FatError {
     ReservedValue,
     IndexOutOfRange,
     InfiniteLoop,
+    InvalidDirEntry,
 }

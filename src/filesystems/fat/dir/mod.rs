@@ -1,4 +1,9 @@
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use time_units::fat::FatTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +111,7 @@ impl DirEntryRaw {
     }
 
     #[must_use]
-    pub const fn is_colume_id(&self) -> bool {
+    pub const fn is_volume_id(&self) -> bool {
         self.attributes & 0x08 > 0
     }
 
@@ -131,17 +136,53 @@ impl DirEntryRaw {
     }
 
     #[must_use]
-    pub fn is_valid_entry(&self) -> bool {
-        for i in self.short_name {
-            if i < b' '
-                || !(i.is_ascii_lowercase()
-                    || i.is_ascii_digit()
-                    || b"$%'-_@~`!(){}^#&".contains(&i))
-            {
-                return false;
+    pub const fn are_all_following_free(&self) -> bool {
+        self.short_name[0] == 0
+    }
+
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        if self.short_name[0] != 0xE5 && self.short_name[0] != 0 {
+            for i in self.short_name {
+                if i < b' '
+                    || !(i.is_ascii_uppercase()
+                        || i.is_ascii_digit()
+                        || b"$%'-_@~`!(){}^#& ".contains(&i))
+                {
+                    return false;
+                }
             }
         }
-        self.short_name[0] != b' ' && self.attributes & 0xC0 == 0
+        ![0x00, 0xE5].contains(&self.short_name[0])
+            && self.attributes & 0xC0 == 0
+            && (!self.is_volume_id() || self.first_cluster() == 0)
+            && (!self.is_directory() || self.file_size() == 0)
+            && self.write_time().is_some()
+            && self.creation_time().is_some()
+            && self.last_access_time().is_some()
+    }
+
+    #[must_use]
+    pub fn short_name(&self) -> Option<String> {
+        let Ok(name) = String::from_utf8(self.short_name[..8].to_vec()) else {
+            return None;
+        };
+
+        let Ok(extension) = String::from_utf8(self.short_name[8..].to_vec()) else {
+            return None;
+        };
+
+        let mut complete_name = if extension.trim().is_empty() {
+            name.trim().to_string()
+        } else {
+            format!("{}.{}", name.trim(), extension.trim())
+        };
+
+        if self.is_hidden() {
+            complete_name = format!(".{complete_name}");
+        }
+
+        Some(complete_name)
     }
 }
 
@@ -200,6 +241,11 @@ impl DirEntry {
     #[must_use]
     pub const fn file_size(&self) -> usize {
         self.raw.file_size()
+    }
+
+    #[must_use]
+    pub const fn is_directory(&self) -> bool {
+        self.raw.is_directory()
     }
 
     #[must_use]

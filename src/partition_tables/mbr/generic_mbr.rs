@@ -37,9 +37,8 @@ impl GenericMbr {
             Some(v) => {
                 if v < 512 || !disk_infos.sector_size.is_supported(v, disk_infos.disk_size) {
                     return Err(DiskErr::UnsupportedDiskSectorSize);
-                } else {
-                    v
                 }
+                v
             }
         };
 

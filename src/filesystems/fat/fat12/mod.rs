@@ -94,11 +94,9 @@ impl Fat12 {
         let root_dir_sectors = (root_dir_entries * 32) / sector_size;
         let total_sectors = disk_infos.disk_size / sector_size;
 
-        let sectors_per_cluster = sectors_per_cluster.map_or_else(
-            || ((total_sectors - root_dir_sectors - 1).div_ceil(4085)).next_power_of_two(),
-            |v| v,
-        );
-
+        let sectors_per_cluster = sectors_per_cluster.unwrap_or_else(|| {
+            ((total_sectors - root_dir_sectors - 1).div_ceil(4085)).next_power_of_two()
+        });
         if sectors_per_cluster.count_ones() != 1
             || sectors_per_cluster > 0xFF
             || total_sectors > 0xFFFF_FFFF
@@ -298,7 +296,7 @@ impl FatFS for Fat12 {
 
     fn get_root_dir(&self, permissions: crate::Permissions) -> Result<SubDisk, DiskErr> {
         let root_dir_start =
-            (self.bpb.reserved_sectors_count() + self.bpb.fat_size() + self.bpb.number_of_fats())
+            (self.bpb.reserved_sectors_count() + self.bpb.fat_size() * self.bpb.number_of_fats())
                 * self.sector_size;
         let root_dir_end = root_dir_start
             + (self.bpb.root_entries_count() * 32).div_ceil(self.sector_size) * self.sector_size;
@@ -326,6 +324,7 @@ impl FatFS for Fat12 {
 
             let start = self.bpb.reserved_sectors_count()
                 + self.bpb.fat_size() * self.bpb.number_of_fats()
+                + (self.bpb.root_entries_count() * 32) / self.sector_size
                 + (clusters[i] - 2) * self.bpb.sectors_per_cluster();
 
             parts.push((
