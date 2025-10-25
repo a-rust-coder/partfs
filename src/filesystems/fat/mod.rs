@@ -7,6 +7,7 @@ use alloc::{sync::Arc, vec, vec::Vec};
 
 pub mod dir;
 pub mod fat12;
+pub mod fat16;
 
 /// A generic trait to avoid code duplication.
 ///
@@ -72,7 +73,10 @@ pub trait FatFS {
     }
 
     #[allow(clippy::missing_errors_doc)]
-    fn ls_dir(&self, directory: Directory) -> Result<Result<Vec<DirEntry>, FatError>, DiskErr> {
+    fn ls_dir(
+        &self,
+        directory: Arc<Directory>,
+    ) -> Result<Result<Vec<DirEntry>, FatError>, DiskErr> {
         let mut current_dir = DiskWrapper::new(self.get_root_dir(Permissions::read_only())?);
 
         let mut sector = vec![0; self.sector_size()];
@@ -99,7 +103,6 @@ pub trait FatFS {
             }
         }
 
-        let parent = Arc::new(directory);
         let mut entries = Vec::new();
 
         'find_entries: for s in 0..current_dir.disk_infos()?.disk_size / self.sector_size() {
@@ -108,10 +111,12 @@ pub trait FatFS {
                 entry.copy_from_slice(&sector[e * 32..e * 32 + 32]);
                 let entry = DirEntryRaw::from(entry);
 
+                // TODO: support long file names
+
                 if entry.is_valid() && !entry.is_long_name() {
                     entries.push(DirEntry {
                         raw: entry,
-                        parent: parent.clone(),
+                        parent: directory.clone(),
                         parent_index: s * self.sector_size() / 32 + e,
                         // This is safe to unwrap because the entry has been checked
                         // (entry.is_valid)
@@ -166,6 +171,37 @@ impl FatEntry {
             }
             Self::Bad => Ok(0xFF7),
             Self::EOF => Ok(0xFFF),
+        }
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub const fn from_fat16(value: usize) -> Result<Self, FatError> {
+        if value > 0xFFFF {
+            Err(FatError::InvalidValueForFATX)
+        } else {
+            match value {
+                0 => Ok(Self::Free),
+                0x2..=0xFFF6 => Ok(Self::Allocated { next: value }),
+                0xFFF7 => Ok(Self::Bad),
+                0xFFFF => Ok(Self::EOF),
+                _ => Err(FatError::ReservedValue),
+            }
+        }
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub const fn to_fat16(&self) -> Result<usize, FatError> {
+        match self {
+            Self::Free => Ok(0),
+            Self::Allocated { next } => {
+                if *next > 0xFFF6 || *next < 2 {
+                    Ok(*next)
+                } else {
+                    Err(FatError::InvalidValueForFATX)
+                }
+            }
+            Self::Bad => Ok(0xFFF7),
+            Self::EOF => Ok(0xFFFF),
         }
     }
 

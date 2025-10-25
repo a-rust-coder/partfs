@@ -1,19 +1,19 @@
+pub use super::fat12::bpb;
+
 use crate::{
     Disk, DiskErr, Permissions,
-    filesystems::fat::{FatEntry, FatError, FatFS, fat12::bpb::BiosParameterBlock},
+    filesystems::fat::{FatEntry, FatError, FatFS, fat16::bpb::BiosParameterBlock},
     wrappers::{DiskWrapper, FragmentedSubDisk, SubDisk},
 };
 use alloc::{sync::Arc, vec, vec::Vec};
 
-pub mod bpb;
-
-pub struct Fat12 {
+pub struct Fat16 {
     bpb: BiosParameterBlock,
     disk: Arc<DiskWrapper>,
     sector_size: usize,
 }
 
-impl Fat12 {
+impl Fat16 {
     /// # Errors
     ///
     /// TODO:
@@ -95,9 +95,10 @@ impl Fat12 {
         let total_sectors = disk_infos.disk_size / sector_size;
 
         let sectors_per_cluster = sectors_per_cluster.unwrap_or_else(|| {
-            ((total_sectors - root_dir_sectors - 1).div_ceil(4085)).next_power_of_two()
+            ((total_sectors - root_dir_sectors - 1).div_ceil(65525)).next_power_of_two()
         });
-        if sectors_per_cluster.count_ones() != 1
+
+        if !sectors_per_cluster.is_power_of_two()
             || sectors_per_cluster > 0xFF
             || total_sectors > 0xFFFF_FFFF
         {
@@ -112,6 +113,10 @@ impl Fat12 {
             - count_of_clusters * sectors_per_cluster
             - fat_size * number_of_fats
             - root_dir_sectors;
+
+        if count_of_clusters < 4085 || count_of_clusters > 65525 {
+            return Ok(None);
+        }
 
         // All checks have already been performed
         #[allow(clippy::cast_possible_truncation)]
@@ -143,7 +148,7 @@ impl Fat12 {
             boot_signature: 0x29,
             volume_id: 0,
             volume_label: *b"NO NAME    ",
-            fs_type: *b"FAT12   ",
+            fs_type: *b"FAT16   ",
             boot_code: [0; 448],
             signature: 0xAA55,
         };
@@ -175,7 +180,7 @@ impl Fat12 {
     }
 }
 
-impl FatFS for Fat12 {
+impl FatFS for Fat16 {
     fn get_fat_entry(
         &self,
         index: usize,
@@ -185,31 +190,17 @@ impl FatFS for Fat12 {
             return Ok(Err(FatError::IndexOutOfRange));
         }
 
-        let fat_offset = index + index / 2;
+        let fat_offset = index * 2;
         let sector_number = self.bpb.reserved_sectors_count()
             + (fat_offset / self.sector_size)
             + fat_index * self.bpb.fat_size();
         let fat_entry_offset = fat_offset % self.sector_size;
 
-        let mut sectors = vec![0; 2 * self.sector_size];
+        let mut sector = vec![0; self.sector_size];
+        self.disk.read_sector(sector_number, &mut sector)?;
+        let entry = u16::from_le_bytes([sector[fat_entry_offset], sector[fat_entry_offset + 1]]);
 
-        self.disk
-            .read_sector(sector_number, &mut sectors[..self.sector_size])?;
-        if fat_offset == self.sector_size - 1 {
-            self.disk
-                .read_sector(sector_number + 1, &mut sectors[self.sector_size..])?;
-        }
-
-        let mut entry =
-            u16::from_le_bytes([sectors[fat_entry_offset], sectors[fat_entry_offset + 1]]);
-
-        if index & 1 == 1 {
-            entry >>= 4;
-        } else {
-            entry &= 0xFFF;
-        }
-
-        Ok(FatEntry::from_fat12(entry as usize))
+        Ok(FatEntry::from_fat16(entry as usize))
     }
 
     fn set_fat_entry(
@@ -222,49 +213,27 @@ impl FatFS for Fat12 {
             return Ok(Err(FatError::IndexOutOfRange));
         }
 
-        let fat_offset = index + index / 2;
+        let fat_offset = 2 * index;
         let sector_number = self.bpb.reserved_sectors_count()
             + (fat_offset / self.sector_size)
             + fat_index * self.bpb.fat_size();
         let fat_entry_offset = fat_offset % self.sector_size;
 
-        let mut sectors = vec![0; 2 * self.sector_size];
-
-        self.disk
-            .read_sector(sector_number, &mut sectors[..self.sector_size])?;
-        if fat_offset == self.sector_size - 1 {
-            self.disk
-                .read_sector(sector_number + 1, &mut sectors[self.sector_size..])?;
-        }
+        let mut sector = vec![0; self.sector_size];
+        self.disk.read_sector(sector_number, &mut sector)?;
 
         // `to_fat12()` already performs the check
         #[allow(clippy::cast_possible_truncation)]
-        let mut value = match value.to_fat12() {
+        let entry = match value.to_fat16() {
             Ok(v) => v as u16,
             Err(e) => return Ok(Err(e)),
-        };
-
-        if index & 1 == 1 {
-            value <<= 4;
-            sectors[fat_entry_offset] &= 0xF;
-            sectors[fat_entry_offset + 1] = 0;
-        } else {
-            value &= 0xFFF;
-            sectors[fat_entry_offset] = 0;
-            sectors[fat_entry_offset + 1] &= 0xF0;
         }
+        .to_le_bytes();
 
-        let entry = value.to_le_bytes();
+        sector[fat_entry_offset] |= entry[0];
+        sector[fat_entry_offset + 1] |= entry[1];
 
-        sectors[fat_entry_offset] |= entry[0];
-        sectors[fat_entry_offset + 1] |= entry[1];
-
-        self.disk
-            .write_sector(sector_number, &sectors[..self.sector_size])?;
-        if fat_offset == self.sector_size - 1 {
-            self.disk
-                .read_sector(sector_number + 1, &mut sectors[self.sector_size..])?;
-        }
+        self.disk.write_sector(sector_number, &sector)?;
 
         Ok(Ok(()))
     }
@@ -295,9 +264,9 @@ impl FatFS for Fat12 {
     }
 
     fn get_root_dir(&self, permissions: crate::Permissions) -> Result<SubDisk, DiskErr> {
-        let root_dir_start =
-            (self.bpb.reserved_sectors_count() + self.bpb.fat_size() * self.bpb.number_of_fats())
-                * self.sector_size;
+        let root_dir_start = (self.bpb.reserved_sectors_count()
+            + self.bpb.fat_size() * self.bpb.number_of_fats())
+            * self.sector_size;
         let root_dir_end = root_dir_start
             + (self.bpb.root_entries_count() * 32).div_ceil(self.sector_size) * self.sector_size;
 
